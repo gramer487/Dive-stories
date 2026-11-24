@@ -1,0 +1,31 @@
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*~
+
+# Dependencies and test output
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+__pycache__/
+
+# Local logs, secrets and scratch files
+*.log
+.env
+.env.*
+!.env.example
+*.tmp
+*.temp
+
+# Personal dive exports stay local by default
+*.csv
+CLAUDE.md
+/samples
+
