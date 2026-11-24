@@ -2,10 +2,12 @@
   "use strict";
 
   const MAX_EDGE = 2400;
+  const CUSTOM_MIN = 320;
+  const CUSTOM_MAX = 4096;
+  const GITHUB_URL = "github.com/gramer487/Dive-stories";
   const ACCENT = "#9df0da";
   const ACCENT_BRIGHT = "#c7fff0";
   const INK = "#f2fbf8";
-  const MUTED = "rgba(224, 246, 240, 0.64)";
   const MUTED_SOFT = "rgba(224, 246, 240, 0.44)";
   const HAIRLINE = "rgba(224, 246, 240, 0.13)";
 
@@ -24,6 +26,8 @@
     sourceChips: document.getElementById("sourceChips"),
     siteInput: document.getElementById("siteInput"),
     dateInput: document.getElementById("dateInput"),
+    configInput: document.getElementById("configInput"),
+    suitInput: document.getElementById("suitInput"),
     diveNumberReadout: document.getElementById("diveNumberReadout"),
     storyStatus: document.getElementById("storyStatus"),
     tankList: document.getElementById("tankList"),
@@ -37,6 +41,9 @@
     emptyPhotoBtn: document.getElementById("emptyPhotoBtn"),
     downloadBtn: document.getElementById("downloadBtn"),
     ratioButtons: Array.from(document.querySelectorAll("[data-ratio]")),
+    customSize: document.getElementById("customSize"),
+    customWidth: document.getElementById("customWidth"),
+    customHeight: document.getElementById("customHeight"),
   };
 
   const state = {
@@ -47,9 +54,13 @@
     diveName: "",
     site: "",
     date: "",
+    configuration: "",
+    exposureSuit: "",
     units: "metric",
     tanks: [],
     ratio: "portrait",
+    customWidth: 1920,
+    customHeight: 2400,
     tankId: 0,
     renderQueued: false,
     savedTimer: null,
@@ -62,6 +73,7 @@
     addTank(false);
     updateStageSubtitle();
     updateGasUI();
+    updateCustomSizeVisibility();
     updateOutputInfo();
     scheduleRender();
 
@@ -94,6 +106,16 @@
       scheduleRender();
     });
 
+    els.configInput.addEventListener("change", () => {
+      state.configuration = els.configInput.value;
+      scheduleRender();
+    });
+
+    els.suitInput.addEventListener("change", () => {
+      state.exposureSuit = els.suitInput.value;
+      scheduleRender();
+    });
+
     els.ratioButtons.forEach((button) => {
       button.addEventListener("click", () => {
         state.ratio = button.dataset.ratio;
@@ -102,10 +124,34 @@
           item.classList.toggle("is-active", active);
           item.setAttribute("aria-pressed", String(active));
         });
+        updateCustomSizeVisibility();
         updateOutputInfo();
         scheduleRender();
       });
     });
+
+    els.customWidth.addEventListener("input", () => {
+      const value = parseCustomDimension(els.customWidth.value);
+      if (value !== null) {
+        state.customWidth = value;
+        updateOutputInfo();
+        scheduleRender();
+      }
+    });
+
+    els.customHeight.addEventListener("input", () => {
+      const value = parseCustomDimension(els.customHeight.value);
+      if (value !== null) {
+        state.customHeight = value;
+        updateOutputInfo();
+        scheduleRender();
+      }
+    });
+
+    els.customWidth.addEventListener("change", () => normalizeCustomInput(els.customWidth, "customWidth"));
+    els.customHeight.addEventListener("change", () => normalizeCustomInput(els.customHeight, "customHeight"));
+
+    document.addEventListener("paste", handlePaste);
 
     els.addTankBtn.addEventListener("click", () => addTank(true));
 
@@ -186,7 +232,7 @@
   /* Photo                                                               */
   /* ------------------------------------------------------------------ */
 
-  function handlePhotoFile(file) {
+  function handlePhotoFile(file, displayName) {
     if (!file.type.startsWith("image/")) {
       showFileError("That doesn’t look like an image. Choose a JPG, PNG or WebP.");
       return;
@@ -195,16 +241,17 @@
     clearFileError();
     const objectUrl = URL.createObjectURL(file);
     const image = new Image();
+    const name = displayName || file.name || "Dive photo";
 
     image.onload = () => {
       if (state.photoUrl) URL.revokeObjectURL(state.photoUrl);
       state.photo = image;
       state.photoUrl = objectUrl;
-      state.photoName = file.name;
+      state.photoName = name;
 
       els.photoDrop.classList.add("is-loaded");
       els.photoThumb.style.backgroundImage = `url("${objectUrl}")`;
-      els.photoMeta.textContent = `${file.name} · ${image.naturalWidth} × ${image.naturalHeight}`;
+      els.photoMeta.textContent = `${name} · ${image.naturalWidth} × ${image.naturalHeight}`;
       els.emptyState.classList.add("is-hidden");
 
       updateStageSubtitle();
@@ -219,6 +266,19 @@
     };
 
     image.src = objectUrl;
+  }
+
+  function handlePaste(event) {
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+
+    const items = Array.from(clipboard.items || []);
+    const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
+    const file = imageItem ? imageItem.getAsFile() : null;
+    if (!file) return;
+
+    event.preventDefault();
+    handlePhotoFile(file, "Pasted image");
   }
 
   /* ------------------------------------------------------------------ */
@@ -254,7 +314,7 @@
         updateOutputInfo();
         els.diveNumberReadout.textContent = dive.number ? `#${dive.number}` : "—";
         els.diveNumberReadout.classList.toggle("is-ready", Boolean(dive.number));
-        els.storyStatus.textContent = "Log loaded";
+        els.storyStatus.textContent = dive.hasDeco ? "Technical dive loaded" : "Log loaded";
         els.storyStatus.classList.add("is-ready");
 
         scheduleRender();
@@ -1002,6 +1062,10 @@
     }
 
     const chartPoints = buildChartPoints(dive);
+    const tags = [];
+    if (dive.hasDeco) tags.push({ label: "TECHNICAL DIVE", accent: true });
+    if (state.configuration) tags.push({ label: state.configuration.toUpperCase(), accent: false });
+    if (state.exposureSuit) tags.push({ label: state.exposureSuit.toUpperCase(), accent: false });
 
     return {
       dive,
@@ -1019,8 +1083,9 @@
       gasLabels,
       sac: sacInfo && sacInfo.sac !== null ? sacInfo.sac : null,
       metrics,
+      tags,
+      technical: dive.hasDeco,
       chartPoints,
-      chartSummary: `${formatDuration(dive.durationSec)} · ${maxDepth} ${depthUnit.toUpperCase()}`,
     };
   }
 
@@ -1178,15 +1243,41 @@
       original: "Original",
       portrait: "4:5",
       square: "1:1",
+      landscape: "16:9",
+      vertical: "9:16",
+      custom: "Custom",
     };
     els.canvasFrame.style.setProperty("--canvas-aspect", String(size.w / size.h));
     els.canvasInfo.textContent = `${labels[state.ratio] || "Original"} · ${size.w} × ${size.h} px`;
+  }
+
+  function updateCustomSizeVisibility() {
+    els.customSize.hidden = state.ratio !== "custom";
+  }
+
+  function parseCustomDimension(raw) {
+    const value = Math.round(Number(raw));
+    if (!Number.isFinite(value) || value < CUSTOM_MIN || value > CUSTOM_MAX) return null;
+    return value;
+  }
+
+  function normalizeCustomInput(input, key) {
+    const value = parseCustomDimension(input.value);
+    if (value === null) {
+      input.value = String(state[key]);
+      return;
+    }
+    state[key] = value;
+    input.value = String(value);
+    updateOutputInfo();
+    scheduleRender();
   }
 
   function renderSourceChips(dive) {
     els.sourceChips.textContent = "";
     const chips = [];
     if (dive.model) chips.push({ label: dive.model, accent: true });
+    if (dive.hasDeco) chips.push({ label: "Technical dive", accent: true });
     if (dive.gasList.length) chips.push({ label: dive.gasList.map((gas) => gas.label).join(" / ") });
     if (dive.conservatism) chips.push({ label: dive.conservatism });
     chips.push({ label: `${dive.sampleCount} profile samples` });
@@ -1216,6 +1307,11 @@
   function outputSize() {
     if (state.ratio === "portrait") return { w: 1920, h: 2400 };
     if (state.ratio === "square") return { w: 2400, h: 2400 };
+    if (state.ratio === "landscape") return { w: 2400, h: 1350 };
+    if (state.ratio === "vertical") return { w: 1350, h: 2400 };
+    if (state.ratio === "custom") {
+      return { w: state.customWidth, h: state.customHeight };
+    }
 
     if (!state.photo) return { w: 1920, h: 2400 };
     const width = state.photo.naturalWidth;
@@ -1336,13 +1432,15 @@
   }
 
   function drawScrim(width, height, layout) {
-    const start = Math.min(height * 0.32, layout.contentTop - height * 0.1);
+    const start = layout.wide
+      ? Math.max(0, Math.min(height * 0.18, layout.contentTop - height * 0.16))
+      : Math.min(height * 0.32, layout.contentTop - height * 0.1);
     const gradient = ctx.createLinearGradient(0, start, 0, height);
     gradient.addColorStop(0, "rgba(2, 10, 12, 0)");
-    gradient.addColorStop(0.18, "rgba(2, 10, 12, 0.08)");
-    gradient.addColorStop(0.48, "rgba(2, 10, 12, 0.38)");
-    gradient.addColorStop(0.72, "rgba(2, 10, 12, 0.76)");
-    gradient.addColorStop(0.9, "rgba(2, 10, 12, 0.91)");
+    gradient.addColorStop(0.16, "rgba(2, 10, 12, 0.1)");
+    gradient.addColorStop(0.34, "rgba(2, 10, 12, 0.36)");
+    gradient.addColorStop(0.58, "rgba(2, 10, 12, 0.7)");
+    gradient.addColorStop(0.8, "rgba(2, 10, 12, 0.88)");
     gradient.addColorStop(1, "rgba(2, 10, 12, 0.96)");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
@@ -1354,30 +1452,51 @@
 
   function computeLayout(width, height, story) {
     const wide = width / height >= 1.32;
-    const scale = Math.max(0.34, Math.min(width / 1920, height / 1300, 1.4));
+    const scale = Math.max(0.42, Math.min(width / 1920, height / 950, 3));
     const padX = width * (wide ? 0.055 : 0.072);
     const contentW = width - padX * 2;
     const footerBaseline = height - height * (wide ? 0.052 : 0.058);
-    const footerLineY = footerBaseline - 34 * scale;
+    const footerLineY = footerBaseline - 44 * scale;
+
     const metricsCount = Math.max(1, story.metrics.length);
+    const metricCols = wide
+      ? (metricsCount <= 3 ? metricsCount : metricsCount === 4 ? 2 : 3)
+      : (metricsCount <= 4 ? metricsCount : metricsCount >= 7 ? 4 : 3);
+    const metricRows = Math.ceil(metricsCount / metricCols);
+    const metricLabelSize = 40 * scale;
+    const metricValueSize = 66 * scale;
+    const metricRowH = 126 * scale;
+    const metricRowGap = 22 * scale;
+    const metricsH = metricRows * metricRowH + (metricRows - 1) * metricRowGap;
+    const metricsBottom = footerLineY - 40 * scale;
+    const metricsTop = metricsBottom - metricsH;
+
+    const heroLabelSize = 40 * scale;
+    const heroH = (wide ? 134 : 158) * scale;
+    const heroGap = (wide ? 40 : 44) * scale;
+    const heroTop = metricsTop - heroGap - heroH;
+    const heroBaseline = heroTop + heroH;
+    const heroFont = (wide ? 108 : 130) * scale;
+
+    const hasTags = story.tags.length > 0;
+    const tagSize = 40 * scale;
+    const tagTracking = 3.6 * scale;
+    const metaSize = 36 * scale;
+    const metaTracking = 3.1 * scale;
+    const titleSize = (wide ? 76 : 86) * scale;
+    const footerSize = 34 * scale;
 
     if (wide) {
       const leftW = contentW * 0.55;
       const chartGap = contentW * 0.05;
       const chartX = padX + leftW + chartGap;
       const chartW = contentW - leftW - chartGap;
-      const metricCols = Math.min(4, metricsCount);
-      const metricRows = Math.ceil(metricsCount / metricCols);
-      const rowH = 64 * scale;
-      const metricsH = metricRows * rowH + (metricRows - 1) * 14 * scale;
-      const metricsTop = footerLineY - 22 * scale - metricsH;
-      const smallValueFloat = metricsTop;
-
-      const heroFont = 108 * scale;
-      const heroTop = metricsTop - 34 * scale - 124 * scale;
-      const titleSize = 76 * scale;
-      const titleTop = heroTop - 20 * scale - titleSize;
-      const metaBaseline = titleTop - 20 * scale;
+      const tagBaseline = hasTags ? heroTop - 66 * scale : null;
+      const titleBaseline = hasTags
+        ? tagBaseline - 62 * scale
+        : heroTop - 44 * scale;
+      const metaBaseline = titleBaseline - titleSize * 0.82 - 24 * scale;
+      const chartY = metaBaseline - 2 * scale;
 
       return {
         wide: true,
@@ -1387,49 +1506,51 @@
         footerBaseline,
         footerLineY,
         titleSize,
-        titleBaseline: titleTop + titleSize * 0.82,
+        titleBaseline,
         titleMaxW: leftW,
         metaBaseline,
         metaRight: padX + leftW,
-        metaSize: 14.5 * scale,
-        metaTracking: 1.7 * scale,
+        metaSize,
+        metaTracking,
+        tagBaseline,
+        tagSize,
+        tagTracking,
         heroTop,
         heroFont,
-        heroLabelSize: 13 * scale,
+        heroLabelSize,
         heroCellW: (leftW - 24 * scale) / 3,
         heroGap: 12 * scale,
-        heroBaseline: heroTop + 124 * scale,
+        heroBaseline,
         metricsTop,
         metricCols,
         metricRows,
         metricCellW: leftW / metricCols,
-        metricValueSize: 40 * scale,
-        metricLabelSize: 14 * scale,
-        metricRowH: rowH + 14 * scale,
-        metricValueFloat: smallValueFloat,
+        metricValueSize,
+        metricLabelSize,
+        metricRowH,
+        metricRowStep: metricRowH + metricRowGap,
         chart: {
           x: chartX,
-          y: metaBaseline - 2 * scale,
+          y: chartY,
           w: chartW,
-          h: footerLineY - 56 * scale - (metaBaseline - 2 * scale),
-          labelSize: 12.5 * scale,
-          headerSize: 13 * scale,
-          showAxes: true,
+          h: footerLineY - 60 * scale - chartY,
+          labelSize: 36 * scale,
+          headerSize: 38 * scale,
+          showAxes: false,
+          showHeader: false,
         },
-        footerSize: 13 * scale,
-        contentTop: metaBaseline - 12 * scale,
+        footerSize,
+        contentTop: metaBaseline - 24 * scale,
       };
     }
 
-    const titleSize = 86 * scale;
-    const metricsBottom = footerLineY - 20 * scale;
-    const metricsH = 66 * scale;
-    const metricsTop = metricsBottom - metricsH;
-    const heroFont = 130 * scale;
-    const heroTop = metricsTop - 30 * scale - 145 * scale;
-    const chartTop = heroTop - 24 * scale - 160 * scale;
-    const titleBaseline = chartTop - 30 * scale;
-    const metaBaseline = titleBaseline - titleSize * 0.82 - 18 * scale;
+    const chartH = 230 * scale;
+    const chartTop = heroTop - 28 * scale - chartH;
+    const tagBaseline = hasTags ? chartTop - 62 * scale : null;
+    const titleBaseline = hasTags
+      ? tagBaseline - 64 * scale
+      : chartTop - 52 * scale;
+    const metaBaseline = titleBaseline - titleSize * 0.82 - 24 * scale;
 
     return {
       wide: false,
@@ -1443,33 +1564,37 @@
       titleMaxW: contentW,
       metaBaseline,
       metaRight: padX + contentW,
-      metaSize: 14.5 * scale,
-      metaTracking: 1.7 * scale,
+      metaSize,
+      metaTracking,
+      tagBaseline,
+      tagSize,
+      tagTracking,
       heroTop,
       heroFont,
-      heroLabelSize: 13 * scale,
+      heroLabelSize,
       heroCellW: (contentW - 24 * scale) / 3,
       heroGap: 12 * scale,
-      heroBaseline: heroTop + 145 * scale,
+      heroBaseline,
       metricsTop,
-      metricCols: Math.max(1, story.metrics.length),
-      metricRows: 1,
-      metricCellW: contentW / Math.max(1, story.metrics.length),
-      metricValueSize: 40 * scale,
-      metricLabelSize: 14 * scale,
-      metricRowH: metricsH,
-      metricValueFloat: metricsTop,
+      metricCols,
+      metricRows,
+      metricCellW: contentW / metricCols,
+      metricValueSize,
+      metricLabelSize,
+      metricRowH,
+      metricRowStep: metricRowH + metricRowGap,
       chart: {
         x: padX,
         y: chartTop,
         w: contentW,
-        h: 160 * scale,
-        labelSize: 12.5 * scale,
-        headerSize: 13 * scale,
+        h: chartH,
+        labelSize: 36 * scale,
+        headerSize: 38 * scale,
         showAxes: false,
+        showHeader: true,
       },
-      footerSize: 13 * scale,
-      contentTop: metaBaseline - 12 * scale,
+      footerSize,
+      contentTop: metaBaseline - 24 * scale,
     };
   }
 
@@ -1481,6 +1606,7 @@
     ctx.save();
     drawMeta(story, layout);
     drawTitle(story, layout);
+    drawTags(story, layout);
     drawChart(story, layout);
     drawHero(story, layout);
     drawMetrics(story, layout);
@@ -1492,7 +1618,9 @@
     ctx.save();
     ctx.font = `400 ${layout.metaSize}px "DM Mono", monospace`;
     setLetterSpacing(layout.metaTracking);
-    ctx.fillStyle = MUTED;
+    ctx.shadowColor = "rgba(2, 10, 12, 0.6)";
+    ctx.shadowBlur = 10 * layout.scale;
+    ctx.fillStyle = "rgba(224, 246, 240, 0.72)";
     ctx.textAlign = "left";
     const metaLine = layout.wide && story.dateLabel
       ? `${story.metaLeft} · ${story.dateLabel}`
@@ -1501,7 +1629,7 @@
 
     if (story.dateLabel && !layout.wide) {
       ctx.textAlign = "right";
-      ctx.fillStyle = "rgba(224, 246, 240, 0.62)";
+      ctx.fillStyle = "rgba(224, 246, 240, 0.7)";
       ctx.fillText(story.dateLabel, layout.metaRight, layout.metaBaseline);
     }
     ctx.restore();
@@ -1530,6 +1658,48 @@
     ctx.restore();
   }
 
+  function drawTags(story, layout) {
+    if (!story.tags.length || layout.tagBaseline === null) return;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(
+      layout.padX,
+      layout.tagBaseline - layout.tagSize * 1.2,
+      layout.titleMaxW,
+      layout.tagSize * 2
+    );
+    ctx.clip();
+    const separator = "  ·  ";
+    let tagSize = layout.tagSize;
+    const tagFont = (size) => `400 ${size}px "DM Mono", monospace`;
+    ctx.font = tagFont(tagSize);
+    setLetterSpacing(layout.tagTracking);
+    const fullTagLine = story.tags.map((tag) => tag.label).join(separator);
+    while (ctx.measureText(fullTagLine).width > layout.titleMaxW && tagSize > layout.tagSize * 0.72) {
+      tagSize -= 0.5;
+      ctx.font = tagFont(tagSize);
+      setLetterSpacing(layout.tagTracking * (tagSize / layout.tagSize));
+    }
+    ctx.shadowColor = "rgba(2, 10, 12, 0.55)";
+    ctx.shadowBlur = 8 * layout.scale;
+    ctx.textAlign = "left";
+    let x = layout.padX;
+
+    story.tags.forEach((tag, index) => {
+      if (index > 0) {
+        ctx.fillStyle = "rgba(224, 246, 240, 0.36)";
+        ctx.fillText(separator, x, layout.tagBaseline);
+        x += ctx.measureText(separator).width;
+      }
+      ctx.fillStyle = tag.accent ? ACCENT : "rgba(224, 246, 240, 0.66)";
+      ctx.fillText(tag.label, x, layout.tagBaseline);
+      x += ctx.measureText(tag.label).width;
+    });
+
+    ctx.restore();
+  }
+
   function drawHero(story, layout) {
     const stats = [
       { label: "DIVE TIME", value: story.duration, unit: "" },
@@ -1553,7 +1723,7 @@
 
       ctx.font = `400 ${layout.heroLabelSize}px "DM Mono", monospace`;
       setLetterSpacing(layout.heroLabelSize * 0.15);
-      ctx.fillStyle = "rgba(224, 246, 240, 0.6)";
+      ctx.fillStyle = "rgba(224, 246, 240, 0.66)";
       ctx.fillText(stat.label, x, layout.heroTop + layout.heroLabelSize);
 
       drawValueWithUnit(
@@ -1575,7 +1745,6 @@
   function drawMetrics(story, layout) {
     if (!story.metrics.length) return;
     const cols = layout.metricCols;
-    const rowH = layout.metricRowH;
 
     ctx.save();
     ctx.textAlign = "left";
@@ -1584,34 +1753,41 @@
       const row = Math.floor(index / cols);
       const col = index % cols;
       const x = layout.padX + col * layout.metricCellW;
-      const y = layout.metricsTop + row * rowH;
-      const textX = x + (col === 0 ? 0 : 12 * layout.scale);
+      const y = layout.metricsTop + row * layout.metricRowStep;
+      const textX = x + (col === 0 ? 0 : 14 * layout.scale);
 
-      const showDivider = layout.wide ? col > 0 : index > 0;
-      if (showDivider) {
+      if (col > 0) {
         ctx.strokeStyle = HAIRLINE;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, y + 1 * layout.scale);
-        ctx.lineTo(x, y + 58 * layout.scale);
+        ctx.lineTo(x, y + layout.metricRowH - 2 * layout.scale);
         ctx.stroke();
       }
 
-      ctx.font = `400 ${layout.metricLabelSize}px "DM Mono", monospace`;
-      setLetterSpacing(layout.metricLabelSize * 0.12);
-      ctx.fillStyle = "rgba(224, 246, 240, 0.54)";
+      let labelSize = layout.metricLabelSize;
+      const labelMaxW = layout.metricCellW - 16 * layout.scale;
+      const labelFont = (size) => `400 ${size}px "DM Mono", monospace`;
+      ctx.font = labelFont(labelSize);
+      setLetterSpacing(labelSize * 0.12);
+      while (ctx.measureText(metric.label).width > labelMaxW && labelSize > layout.metricLabelSize * 0.72) {
+        labelSize -= 0.5;
+        ctx.font = labelFont(labelSize);
+        setLetterSpacing(labelSize * 0.12);
+      }
+      ctx.fillStyle = "rgba(224, 246, 240, 0.62)";
       ctx.fillText(metric.label, textX, y + layout.metricLabelSize);
 
       drawValueWithUnit(
         metric.value,
         metric.unit,
         textX,
-        y + 52 * layout.scale,
+        y + 108 * layout.scale,
         layout.metricValueSize,
-        layout.metricValueSize * 0.58,
-        layout.metricCellW - 15 * layout.scale,
-        "rgba(239, 250, 247, 0.94)",
-        "rgba(224, 246, 240, 0.54)"
+        layout.metricValueSize * 0.5,
+        layout.metricCellW - 16 * layout.scale,
+        "rgba(239, 250, 247, 0.96)",
+        "rgba(224, 246, 240, 0.62)"
       );
     });
 
@@ -1629,14 +1805,25 @@
 
     ctx.font = `400 ${layout.footerSize}px "DM Mono", monospace`;
     setLetterSpacing(layout.footerSize * 0.12);
-    ctx.fillStyle = "rgba(224, 246, 240, 0.5)";
+    ctx.fillStyle = "rgba(224, 246, 240, 0.62)";
     ctx.textAlign = "left";
-    const source = story.dive.model
-      ? `SHEARWATER · ${story.dive.model.toUpperCase()}`
-      : "SHEARWATER DIVE LOG";
-    ctx.fillText(source, layout.padX, layout.footerBaseline);
+    ctx.fillText("SHEARWATER", layout.padX, layout.footerBaseline);
 
-    drawWordmark(layout.padX + layout.contentW, layout.footerBaseline, layout.footerSize, "right");
+    const right = layout.padX + layout.contentW;
+    const urlGap = 20 * layout.scale;
+    ctx.font = `400 ${layout.footerSize}px "DM Mono", monospace`;
+    setLetterSpacing(layout.footerSize * 0.06);
+    const urlWidth = ctx.measureText(GITHUB_URL).width;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(224, 246, 240, 0.66)";
+    ctx.fillText(GITHUB_URL, right, layout.footerBaseline);
+
+    drawWordmark(
+      right - urlWidth - urlGap,
+      layout.footerBaseline,
+      layout.footerSize,
+      "right"
+    );
     ctx.restore();
   }
 
@@ -1667,41 +1854,46 @@
     const headerY = chart.y + (chart.showAxes ? 0 : 2 * scale);
 
     ctx.save();
-    ctx.font = `400 ${chart.headerSize}px "DM Mono", monospace`;
-    setLetterSpacing(chart.headerSize * 0.13);
-    ctx.fillStyle = "rgba(224, 246, 240, 0.54)";
-    ctx.textAlign = "left";
-    ctx.fillText("DEPTH PROFILE", chart.x, headerY);
-    ctx.textAlign = "right";
-    ctx.fillText(story.chartSummary, chart.x + chart.w, headerY);
+    if (chart.showHeader) {
+      ctx.font = `400 ${chart.headerSize}px "DM Mono", monospace`;
+      setLetterSpacing(chart.headerSize * 0.13);
+      ctx.shadowColor = "rgba(2, 10, 12, 0.7)";
+      ctx.shadowBlur = 12 * scale;
+      ctx.fillStyle = "rgba(224, 246, 240, 0.76)";
+      ctx.textAlign = "left";
+      ctx.fillText("DEPTH PROFILE", chart.x, headerY);
+    }
 
     let plotX = chart.x;
     let plotW = chart.w;
-    const plotTop = headerY + 24 * scale;
+    const plotTop = headerY + 58 * scale;
     const plotBottom = chart.y + chart.h;
     const plotH = Math.max(20, plotBottom - plotTop);
 
     if (chart.showAxes) {
-      const axisW = 34 * scale;
+      const axisW = 60 * scale;
       plotX += axisW;
       plotW -= axisW;
 
       ctx.font = `400 ${chart.labelSize}px "DM Mono", monospace`;
       setLetterSpacing(0);
-      ctx.fillStyle = "rgba(224, 246, 240, 0.48)";
+      ctx.fillStyle = "rgba(224, 246, 240, 0.78)";
       ctx.textAlign = "right";
-      ctx.fillText("0", chart.x + axisW - 8 * scale, plotBottom);
+      ctx.fillText("0", chart.x + axisW - 10 * scale, plotBottom);
       ctx.fillText(
         `${story.maxDepth} ${story.depthUnit}`,
-        chart.x + axisW - 8 * scale,
+        chart.x + axisW - 10 * scale,
         plotTop + chart.labelSize
       );
 
       ctx.textAlign = "left";
-      ctx.fillText("0:00", plotX, plotBottom + 19 * scale);
+      ctx.fillText("0:00", plotX, plotBottom + 30 * scale);
       ctx.textAlign = "right";
-      ctx.fillText(story.duration, plotX + plotW, plotBottom + 19 * scale);
+      ctx.fillText(story.duration, plotX + plotW, plotBottom + 30 * scale);
     }
+
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
 
     const maxScale = Math.max(story.maxDepthM, 1) * 1.06;
     const xFor = (time) =>
@@ -1744,6 +1936,12 @@
       if (index === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
+    ctx.strokeStyle = "rgba(2, 10, 12, 0.35)";
+    ctx.lineWidth = 7 * scale;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.stroke();
+
     ctx.strokeStyle = ACCENT;
     ctx.lineWidth = (chart.showAxes ? 2.2 : 2) * scale;
     ctx.lineJoin = "round";
