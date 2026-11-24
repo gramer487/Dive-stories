@@ -4,7 +4,7 @@
   const MAX_EDGE = 2400;
   const CUSTOM_MIN = 320;
   const CUSTOM_MAX = 4096;
-  const GITHUB_URL = "github.com/gramer487/Dive-stories";
+  const SITE_URL = "gramer487.github.io/Dive-stories";
   const ACCENT = "#9df0da";
   const ACCENT_BRIGHT = "#c7fff0";
   const INK = "#f2fbf8";
@@ -125,6 +125,12 @@
           item.setAttribute("aria-pressed", String(active));
         });
         updateCustomSizeVisibility();
+        if (state.ratio === "custom" && window.matchMedia("(pointer: fine)").matches) {
+          requestAnimationFrame(() => {
+            els.customWidth.focus({ preventScroll: true });
+            els.customWidth.select();
+          });
+        }
         updateOutputInfo();
         scheduleRender();
       });
@@ -1428,10 +1434,20 @@
     gradient.addColorStop(1, "rgba(2, 10, 12, 0.7)");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-    drawWordmark(width * 0.94, height * 0.94, Math.max(11, width * 0.0085), "right");
+    const brandFont = Math.max(16, width * 0.014);
+    drawBrandMark(width * 0.072, Math.max(brandFont * 1.05, height * 0.062), brandFont);
   }
 
   function drawScrim(width, height, layout) {
+    if (layout.showBrand) {
+      const brandBottom = layout.brandBaseline + layout.brandFont * 0.55;
+      const topScrim = ctx.createLinearGradient(0, 0, 0, brandBottom);
+      topScrim.addColorStop(0, "rgba(2, 10, 12, 0.34)");
+      topScrim.addColorStop(1, "rgba(2, 10, 12, 0)");
+      ctx.fillStyle = topScrim;
+      ctx.fillRect(0, 0, width, brandBottom);
+    }
+
     const start = layout.wide
       ? Math.max(0, Math.min(height * 0.18, layout.contentTop - height * 0.16))
       : Math.min(height * 0.32, layout.contentTop - height * 0.1);
@@ -1498,6 +1514,10 @@
       const metaBaseline = titleBaseline - titleSize * 0.82 - 24 * scale;
       const chartY = metaBaseline - 2 * scale;
 
+      const brandFont = 46 * scale;
+      const brandBaseline = Math.max(brandFont * 1.05, height * 0.062);
+      const showBrand = metaBaseline - brandBaseline > brandFont * 0.9;
+
       return {
         wide: true,
         scale,
@@ -1512,6 +1532,9 @@
         metaRight: padX + leftW,
         metaSize,
         metaTracking,
+        brandFont,
+        brandBaseline,
+        showBrand,
         tagBaseline,
         tagSize,
         tagTracking,
@@ -1552,6 +1575,10 @@
       : chartTop - 52 * scale;
     const metaBaseline = titleBaseline - titleSize * 0.82 - 24 * scale;
 
+    const brandFont = 46 * scale;
+    const brandBaseline = Math.max(brandFont * 1.05, height * 0.062);
+    const showBrand = metaBaseline - brandBaseline > brandFont * 0.9;
+
     return {
       wide: false,
       scale,
@@ -1566,6 +1593,9 @@
       metaRight: padX + contentW,
       metaSize,
       metaTracking,
+      brandFont,
+      brandBaseline,
+      showBrand,
       tagBaseline,
       tagSize,
       tagTracking,
@@ -1604,6 +1634,7 @@
 
   function drawStory(story, layout) {
     ctx.save();
+    drawBrand(layout);
     drawMeta(story, layout);
     drawTitle(story, layout);
     drawTags(story, layout);
@@ -1611,6 +1642,33 @@
     drawHero(story, layout);
     drawMetrics(story, layout);
     drawFooter(story, layout);
+    ctx.restore();
+  }
+
+  function drawBrand(layout) {
+    if (!layout.showBrand) return;
+    drawBrandMark(layout.padX, layout.brandBaseline, layout.brandFont);
+  }
+
+  function drawBrandMark(x, baseline, size) {
+    ctx.save();
+    const dotRadius = Math.max(1.2, size * 0.095);
+    const textX = x + dotRadius * 2 + size * 0.42;
+
+    ctx.font = `600 ${size}px "Space Grotesk", sans-serif`;
+    setLetterSpacing(-size * 0.012);
+    ctx.textAlign = "left";
+    ctx.shadowColor = "rgba(2, 10, 12, 0.7)";
+    ctx.shadowBlur = Math.max(6, size * 0.5);
+    ctx.fillStyle = "rgba(239, 250, 247, 0.92)";
+    ctx.fillText("Dive Stories", textX, baseline);
+
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(x + dotRadius, baseline - size * 0.3, dotRadius, 0, Math.PI * 2);
+    ctx.fillStyle = ACCENT;
+    ctx.fill();
     ctx.restore();
   }
 
@@ -1810,38 +1868,11 @@
     ctx.fillText("SHEARWATER", layout.padX, layout.footerBaseline);
 
     const right = layout.padX + layout.contentW;
-    const urlGap = 20 * layout.scale;
     ctx.font = `400 ${layout.footerSize}px "DM Mono", monospace`;
     setLetterSpacing(layout.footerSize * 0.06);
-    const urlWidth = ctx.measureText(GITHUB_URL).width;
     ctx.textAlign = "right";
     ctx.fillStyle = "rgba(224, 246, 240, 0.66)";
-    ctx.fillText(GITHUB_URL, right, layout.footerBaseline);
-
-    drawWordmark(
-      right - urlWidth - urlGap,
-      layout.footerBaseline,
-      layout.footerSize,
-      "right"
-    );
-    ctx.restore();
-  }
-
-  function drawWordmark(x, baseline, size, align) {
-    ctx.save();
-    ctx.textAlign = align;
-    ctx.font = `600 ${size * 1.25}px "Space Grotesk", sans-serif`;
-    setLetterSpacing(size * 0.2);
-    ctx.fillStyle = "rgba(239, 250, 247, 0.78)";
-    const text = "DIVE STORIES";
-    ctx.fillText(text, x, baseline);
-
-    const textWidth = ctx.measureText(text).width;
-    const dotX = align === "right" ? x - textWidth - size * 0.9 : x + textWidth + size * 0.9;
-    ctx.beginPath();
-    ctx.arc(dotX, baseline - size * 0.33, Math.max(1.5, size * 0.19), 0, Math.PI * 2);
-    ctx.fillStyle = ACCENT;
-    ctx.fill();
+    ctx.fillText(SITE_URL, right, layout.footerBaseline);
     ctx.restore();
   }
 
