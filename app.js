@@ -514,6 +514,12 @@
     const gfMax = toNumber(summary["gf maximum"]);
     const decoModel = (summary["deco model"] || "").trim();
     const vpmConservatism = (summary["vpm-b conservatism"] || "").trim();
+    const surfacePressureRaw = toNumber(summary["start surface pressure"]);
+    const surfacePressureBar = surfacePressureRaw === null || surfacePressureRaw <= 0
+      ? 1.01325
+      : surfacePressureRaw > 10
+        ? surfacePressureRaw / 1000
+        : surfacePressureRaw;
 
     let conservatism = null;
     if (gfMin !== null && gfMax !== null) {
@@ -554,6 +560,7 @@
       maxDepthM,
       avgDepthM,
       avgTempC,
+      surfacePressureBar,
       samples,
       bottomGas,
       gasList,
@@ -1027,10 +1034,7 @@
     const gasLabels = dive.gasList.map((gas) => gas.label);
     const gasLabel = gasLabels.length ? gasLabels.join(" / ") : null;
 
-    const endDepthM = dive.maxDepthM !== null && dive.bottomGas
-      ? equivalentNarcoticDepth(dive.maxDepthM, dive.bottomGas)
-      : null;
-    const endDepth = endDepthM === null ? null : formatDistance(endDepthM, units);
+    const surfaceGf = computeSurfaceGf(dive);
 
     const dateLabel = formatDateLabel(state.date);
     const title = state.site.trim() || (dive.number ? `Dive ${dive.number}` : "Untitled dive");
@@ -1057,8 +1061,8 @@
     if (dive.endCns !== null) {
       metrics.push({ label: "CNS END", value: String(round(dive.endCns)), unit: "%" });
     }
-    if (endDepth !== null) {
-      metrics.push({ label: "END", value: endDepth, unit: depthUnit });
+    if (surfaceGf !== null) {
+      metrics.push({ label: "SfGF", value: String(round(surfaceGf)), unit: "%" });
     }
     if (dive.conservatism) {
       metrics.push({ label: "CONSERVATISM", value: dive.conservatism, unit: "" });
@@ -1095,9 +1099,66 @@
     };
   }
 
-  function equivalentNarcoticDepth(depthM, gas) {
-    const inert = Math.max(0, 1 - (gas.o2 || 0) - (gas.he || 0));
-    return Math.max(0, (depthM + 10) * inert - 10);
+  /* ZHL-16C tissue coefficients (N2 and He), with the standard 0.0627 bar
+     water-vapour correction. Surface GF is the raw M-value gradient factor
+     the leading compartment would have at surface pressure. */
+  const ZHL16C = {
+    n2HalfTimes: [4, 8, 12.5, 18.5, 27, 38.3, 54.3, 77, 109, 146, 187, 239, 305, 390, 498, 635],
+    n2A: [1.2599, 1, 0.8618, 0.7562, 0.6667, 0.5933, 0.5282, 0.4701, 0.4187, 0.3798, 0.3497, 0.3223, 0.2971, 0.2737, 0.2523, 0.2327],
+    n2B: [0.505, 0.6514, 0.7222, 0.7825, 0.8126, 0.8434, 0.8693, 0.891, 0.9092, 0.9222, 0.9319, 0.9403, 0.9477, 0.9544, 0.9602, 0.9653],
+    heHalfTimes: [1.88, 3.02, 4.72, 6.99, 10.21, 14.48, 20.53, 29.11, 41.2, 55.19, 70.69, 90.34, 115.29, 147.42, 188.24, 240.03],
+    heA: [1.6189, 1.383, 1.1919, 1.0458, 0.922, 0.8205, 0.7305, 0.6502, 0.595, 0.5545, 0.5333, 0.5189, 0.5181, 0.5176, 0.5172, 0.5119],
+    heB: [0.477, 0.5747, 0.6527, 0.7223, 0.7583, 0.7957, 0.8279, 0.8553, 0.8757, 0.8903, 0.8997, 0.9073, 0.9122, 0.9171, 0.9217, 0.9267],
+  };
+  const WATER_VAPOR_BAR = 0.0627;
+
+  function computeSurfaceGf(dive) {
+    const samples = dive.samples.filter(
+      (sample) => sample.t >= 0 && sample.t <= dive.durationSec
+    );
+    if (samples.length < 2) return null;
+
+    const surfacePressure = dive.surfacePressureBar || 1.01325;
+    const n2 = new Array(16).fill(0.79 * Math.max(0, surfacePressure - WATER_VAPOR_BAR));
+    const he = new Array(16).fill(0);
+    const fallback = dive.bottomGas || { o2: 0.21, he: 0 };
+
+    for (let index = 1; index < samples.length; index += 1) {
+      const previous = samples[index - 1];
+      const current = samples[index];
+      const dtMin = (current.t - previous.t) / 60;
+      if (!(dtMin > 0)) continue;
+
+      const o2 = current.o2 === null ? fallback.o2 : current.o2;
+      const heFraction = current.he === null ? fallback.he : current.he;
+      const n2Fraction = Math.max(0, 1 - o2 - heFraction);
+      const fromPressure = Math.max(0, surfacePressure + previous.depthM / 10 - WATER_VAPOR_BAR);
+      const toPressure = Math.max(0, surfacePressure + current.depthM / 10 - WATER_VAPOR_BAR);
+      const inspiredN2 = ((fromPressure + toPressure) / 2) * n2Fraction;
+      const inspiredHe = ((fromPressure + toPressure) / 2) * heFraction;
+
+      for (let compartment = 0; compartment < 16; compartment += 1) {
+        const n2Decay = Math.exp((-Math.log(2) * dtMin) / ZHL16C.n2HalfTimes[compartment]);
+        n2[compartment] = inspiredN2 + (n2[compartment] - inspiredN2) * n2Decay;
+        const heDecay = Math.exp((-Math.log(2) * dtMin) / ZHL16C.heHalfTimes[compartment]);
+        he[compartment] = inspiredHe + (he[compartment] - inspiredHe) * heDecay;
+      }
+    }
+
+    let highest = 0;
+    for (let compartment = 0; compartment < 16; compartment += 1) {
+      const total = n2[compartment] + he[compartment];
+      const a = total > 0
+        ? (ZHL16C.n2A[compartment] * n2[compartment] + ZHL16C.heA[compartment] * he[compartment]) / total
+        : ZHL16C.n2A[compartment];
+      const b = total > 0
+        ? (ZHL16C.n2B[compartment] * n2[compartment] + ZHL16C.heB[compartment] * he[compartment]) / total
+        : ZHL16C.n2B[compartment];
+      const mValue = a + surfacePressure / b;
+      const gf = ((total - surfacePressure) / (mValue - surfacePressure)) * 100;
+      if (gf > highest) highest = gf;
+    }
+    return highest;
   }
 
   function buildChartPoints(dive) {
@@ -1910,11 +1971,11 @@
       setLetterSpacing(0);
       ctx.fillStyle = "rgba(224, 246, 240, 0.78)";
       ctx.textAlign = "right";
-      ctx.fillText("0", chart.x + axisW - 10 * scale, plotBottom);
+      ctx.fillText("0", chart.x + axisW - 10 * scale, plotTop + chart.labelSize);
       ctx.fillText(
         `${story.maxDepth} ${story.depthUnit}`,
         chart.x + axisW - 10 * scale,
-        plotTop + chart.labelSize
+        plotBottom
       );
 
       ctx.textAlign = "left";
@@ -1930,7 +1991,7 @@
     const xFor = (time) =>
       plotX + Math.max(0, Math.min(1, time / story.dive.durationSec)) * plotW;
     const yFor = (depthM) =>
-      plotTop + plotH - Math.max(0, Math.min(1, depthM / maxScale)) * plotH;
+      plotTop + Math.max(0, Math.min(1, depthM / maxScale)) * plotH;
 
     ctx.strokeStyle = "rgba(224, 246, 240, 0.09)";
     ctx.lineWidth = 1;
@@ -1943,20 +2004,20 @@
     }
 
     ctx.beginPath();
-    ctx.moveTo(xFor(0), plotBottom);
+    ctx.moveTo(xFor(0), plotTop);
     points.forEach((point, index) => {
       const x = xFor(point.t);
       const y = yFor(point.depthM);
       if (index === 0) ctx.lineTo(x, y);
       else ctx.lineTo(x, y);
     });
-    ctx.lineTo(xFor(story.dive.durationSec), plotBottom);
+    ctx.lineTo(xFor(story.dive.durationSec), plotTop);
     ctx.closePath();
 
     const fill = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
-    fill.addColorStop(0, "rgba(157, 240, 218, 0.19)");
-    fill.addColorStop(0.55, "rgba(157, 240, 218, 0.075)");
-    fill.addColorStop(1, "rgba(157, 240, 218, 0.008)");
+    fill.addColorStop(0, "rgba(157, 240, 218, 0)");
+    fill.addColorStop(0.5, "rgba(157, 240, 218, 0.05)");
+    fill.addColorStop(1, "rgba(157, 240, 218, 0.16)");
     ctx.fillStyle = fill;
     ctx.fill();
 
