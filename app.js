@@ -54,8 +54,8 @@
     diveName: "",
     site: "",
     date: "",
-    configuration: "",
-    exposureSuit: "",
+    configuration: els.configInput.value,
+    exposureSuit: els.suitInput.value,
     units: "metric",
     tanks: [],
     ratio: "portrait",
@@ -70,6 +70,7 @@
 
   function init() {
     bindEvents();
+    syncStoryOptions();
     addTank(false);
     updateStageSubtitle();
     updateGasUI();
@@ -82,6 +83,22 @@
     }
 
     window.addEventListener("resize", scheduleRender, { passive: true });
+    window.addEventListener("pageshow", syncStoryOptions);
+  }
+
+  // Browsers can restore <select> values on reload without firing "change".
+  // Mirror what the form shows into state so the card matches it immediately.
+  function syncStoryOptions() {
+    let changed = false;
+    if (els.configInput.value !== state.configuration) {
+      state.configuration = els.configInput.value;
+      changed = true;
+    }
+    if (els.suitInput.value !== state.exposureSuit) {
+      state.exposureSuit = els.suitInput.value;
+      changed = true;
+    }
+    if (changed) scheduleRender();
   }
 
   /* ------------------------------------------------------------------ */
